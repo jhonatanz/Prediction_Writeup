@@ -1,0 +1,154 @@
+---
+title: "Prediction Assignment Writeup for Practical ML Course"
+author: "Jhonatan Zambrano"
+date: "1/28/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Introduction
+
+The objective of this report is to construct a prediction model from a given dataset. It's composed from compiled data from measurements of movement variables from 6 individuals that perform weight lifting exercises. Each exercise is repeated 10 times. Additionally, the exercise is executed in 5 different ways, but only 1 of these can be considered as correct.
+
+Each way in which the exercise is performed is labeled as A, B, C, D or E, the prediction model must be capable of distinguish the belonging group for each set of lectures.
+
+The data was obtained from: [Human Activity Recognition project](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har)
+
+## Data Preparation
+
+Let begins checking the structure of the dataframe:
+
+```{r exploration_1, message=FALSE}
+library(dplyr)
+```
+
+```{r exploration_2}
+tr_raw1<-read.csv("pml-training.csv")
+dim(tr_raw1)
+# as we got a lot of predictors (160) lets check just the first 20
+head(tr_raw1[, 1:20],3)
+```
+
+We can observe that there are some N/A and void predictors in the dataset, we will exclude all predictor that have more than 30% NA or void registers in it using the following transformations:
+
+```{r exploration_3}
+# deleting NA predictors from dataframe
+
+t1<-apply(tr_raw1, 2, function(x) mean(is.na(x)))
+n1<-names(t1[t1>0.3])
+tr_raw2<-select(tr_raw1, ! all_of(n1))
+
+# deleting "void" predictors from dataframe
+
+t2<-apply(tr_raw2, 2, function(x) mean(x == ""))
+n2<-names(t2[t2>0.3])
+tr_raw2<-select(tr_raw2, ! all_of(n2))
+
+# deleting predictors that will not used on the model
+tr_raw2<-select(tr_raw2, ! c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", 
+                             "new_window", "num_window"))
+tr_raw2$classe <- as.factor(tr_raw2$classe)
+dim(tr_raw2)
+```
+
+Now the predictors are only 53 instead of 160 that we have at the beginning, all this predictors are numeric and the output *classe* was defined as a factor.
+
+## Cross Validation
+
+As we have plenty of data, we consider that a training set of 75% of the samples and a testing set of 25% is enough to train and test a prediction model for this dataset. Due the size of the dataset, a k-fold strategy could be computationally expensive.
+
+```{r CV_1, message=FALSE}
+library(caret)
+vec_tr <- createDataPartition(y = tr_raw2$classe, p = 0.75, list = F)
+training <-tr_raw2[vec_tr,]
+testing <- tr_raw2[-vec_tr,]
+dim(training)
+dim(testing)
+```
+
+
+## Linear Model (LDA)
+
+We'll explore first a simple linear model as an initial benchmark. In this case we'll use a LDA model:
+
+```{r linear_1, message=FALSE}
+library(MASS)
+set.seed(1234)
+mdl_lda<-lda(classe~., data = training)
+pred_lda <- predict(mdl_lda, newdata = testing)
+confusionMatrix(reference = testing$classe, data = pred_lda$class)
+```
+
+The result is a model with an testing accuracy around 70%, probably indicating that a non linear relation could be present on the data.
+
+## Non linear aproach (QDA)
+
+Lets see what is the behavior of a QDA model
+
+```{r QDA_1}
+mdl_qda<-qda(classe~., data = training)
+pred_qda <- predict(mdl_qda, newdata = testing)
+confusionMatrix(reference = testing$classe, data = pred_qda$class)
+```
+
+This time the model shows a testing accuracy around 90%, indicating that a non linear model definitively explains better the data.
+
+## Support Vector Machine (SVM)
+
+For Support Vector Machines, R uses by default the *"radial"* kernel, as well as the *cost* parameter set at 1. Using the defaults we obtain:
+
+```{r SVM_1}
+library(e1071)
+mdl_svm<-svm(classe~., data = training)
+pred_svm <- predict(mdl_svm, newdata = testing, type = "raw")
+confusionMatrix(reference = testing$classe, data = pred_svm)
+```
+
+With a testing accuracy around 95%, however, changing the *cost* parameter to 10 better results are obtained:
+
+```{r SVM_2}
+mdl_svm<-svm(classe~., data = training, cost = 10)
+pred_svm <- predict(mdl_svm, newdata = testing, type = "raw")
+confusionMatrix(reference = testing$classe, data = pred_svm)
+```
+
+Now, a 98% of testing accuracy is obtained, the *cost* parameter was selected from the *tune* function on the *e1071* library, in which we can set a range of values for the parameters and the function calculates the best combination for the model, the code is showed for reference, but be aware that it takes a long time to be executed:
+
+```{r SVM_3, eval=FALSE}
+tune.out = tune(svm, classe~., data = training, kernel ="radial", 
+                ranges = list (cost = c (0.1 ,1 ,10 ,100 ,1000), 
+                               gamma = c (0.5 ,1 ,2 ,3 ,4)))
+```
+
+## Random Forest
+
+The Random Forest model takes a long time to be trained, however it takes less time than the *tune* function used to select the best SVM model, in this case we only load the file that contains the model previously trained and see the performance for comparison:
+
+```{r}
+mdl_rf<-readRDS("RF_model.RDS")
+pred_rf <- predict(mdl_rf, newdata = testing, type = "raw")
+confusionMatrix(reference = testing$classe, data = pred_rf)
+```
+
+An excellent 99+% is obtained with the random forest model.
+
+## Conclusion
+
+From all alternatives explored, we obtain the following 95% confidence interval for testing accuracy (in percentage):
+
+```{r conclusion, echo=FALSE}
+# LDA
+print(c("LDA Model:", round(100*confusionMatrix(reference = testing$classe, data = pred_lda$class)$overall[3:4], 2)), quote = FALSE)
+# QDA
+print(c("QDA Model:", round(100*confusionMatrix(reference = testing$classe, data = pred_qda$class)$overall[3:4], 2)), quote = FALSE)
+# SVM
+print(c("SVM Model:", round(100*confusionMatrix(reference = testing$classe, data = pred_svm)$overall[3:4], 2)), quote = FALSE)
+# RF
+print(c("RF Model:", round(100*confusionMatrix(reference = testing$classe, data = pred_rf)$overall[3:4], 2)), quote = FALSE)
+```
+
+The random forest model gives the better performance. In relation with the time to be trained it took a long time compared with SVM, but tuning SVM to find the best model took much more time that directly train the RF model, in conclusion RF provides the best results compared with the computational effort required to be trained.
